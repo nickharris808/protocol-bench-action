@@ -1,0 +1,56 @@
+name: self-test
+on:
+  push: {branches: [main]}
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  passing-submission:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Generate a perfect submission
+        run: |
+          pip install "minicheck @ git+https://github.com/nickharris808/minicheck.git"
+          pip install "protocol-bench @ git+https://github.com/nickharris808/protocol-bench.git"
+          protocol-bench run bfs -o submission.json
+      - id: score
+        uses: ./
+        with:
+          submission: submission.json
+          min-balanced-accuracy: "1.0"
+          require-valid-counterexamples: "2"
+      - name: Outputs must be populated
+        run: |
+          test "${{ steps.score.outputs.balanced-accuracy }}" = "1.0"
+          test "${{ steps.score.outputs.valid-counterexamples }}" = "2"
+
+  failing-submission-must-fail-the-job:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: |
+          pip install "minicheck @ git+https://github.com/nickharris808/minicheck.git"
+          pip install "protocol-bench @ git+https://github.com/nickharris808/protocol-bench.git"
+          protocol-bench run always-safe -o weak.json
+      - id: weak
+        continue-on-error: true
+        uses: ./
+        with:
+          submission: weak.json
+          min-balanced-accuracy: "1.0"
+      - name: The action must have failed on the weak submission
+        run: |
+          test "${{ steps.weak.outcome }}" = "failure" || { echo "::error::a weak submission passed the gate"; exit 1; }
+
+  misconfigured-must-exit-3:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - id: missing
+        continue-on-error: true
+        uses: ./
+        with:
+          submission: does-not-exist.json
+      - name: A scan of nothing must not report success
+        run: test "${{ steps.missing.outcome }}" = "failure"
