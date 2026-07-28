@@ -6,8 +6,14 @@
 set -euo pipefail
 
 # Install only if it is not already importable, so the action works in a prepared runner too.
+#
+# Installed from GitHub, not PyPI. `pip install protocol-bench` 404s — neither it nor its
+# `minicheck` dependency is published yet — so a bare name here made this action fail for
+# everyone except a workflow that had already installed it by hand. The pin is `@main`, which
+# is what the repository publishes; pin a tag instead if you need the version frozen.
 python -c "import protocol_bench" 2>/dev/null || \
-  python -m pip install --quiet --disable-pip-version-check protocol-bench
+  python -m pip install --quiet --disable-pip-version-check \
+    "protocol-bench @ git+https://github.com/nickharris808/protocol-bench@main"
 
 if [[ -n "${PB_COMPLETIONS:-}" ]]; then
   [[ -f "$PB_COMPLETIONS" ]] || { echo "::error::completions file not found: $PB_COMPLETIONS"; exit 3; }

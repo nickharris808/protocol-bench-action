@@ -54,3 +54,41 @@ jobs:
           submission: does-not-exist.json
       - name: A scan of nothing must not report success
         run: test "${{ steps.missing.outcome }}" = "failure"
+
+  # The job that matters most: NOTHING is pre-installed, so the action's own install path runs.
+  # Every other job here pip-installs protocol-bench before invoking the action, which makes
+  # entrypoint.sh's `import protocol_bench` succeed and skips the install entirely. That is how a
+  # broken `pip install protocol-bench` (404 — the package is not on PyPI) stayed green.
+  stranger-with-nothing-preinstalled:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Confirm protocol-bench is genuinely absent
+        run: |
+          if python -c "import protocol_bench" 2>/dev/null; then
+            echo "::error::protocol_bench is already importable; this job proves nothing"
+            exit 1
+          fi
+          echo "confirmed absent — the action must install it itself"
+      - name: Build a submission WITHOUT installing the package
+        run: |
+          cat > submission.json <<'JSON'
+          {"ieee_4way_handshake_krack": {"violated": false}}
+          JSON
+      - id: cold
+        continue-on-error: true
+        uses: ./
+        with:
+          submission: submission.json
+          min-balanced-accuracy: "0.0"
+      - name: The action must have installed its own dependency and scored
+        run: |
+          test "${{ steps.cold.outcome }}" = "success" || {
+            echo "::error::the action could not run without a pre-installed protocol-bench"
+            exit 1
+          }
+          test -n "${{ steps.cold.outputs.balanced-accuracy }}" || {
+            echo "::error::no balanced-accuracy output"
+            exit 1
+          }
+          echo "balanced-accuracy=${{ steps.cold.outputs.balanced-accuracy }}"
