@@ -1,0 +1,19 @@
+cff-version: 1.2.0
+message: "If you use this action, please cite it as below."
+title: "protocol-bench-action: enforce a benchmark claim in CI, by replay"
+abstract: >-
+  A GitHub Action that scores a Protocol-Bench submission on every push and fails the build if a
+  claimed detection cannot be demonstrated. Every counterexample is replayed against the model it
+  claims to break, so the gate cannot be passed by guessing.
+authors:
+  - family-names: Harris
+    given-names: Nick
+repository-code: "https://github.com/nickharris808/protocol-bench-action"
+url: "https://nickharris808.github.io/verification-docs/"
+license: MIT
+type: software
+keywords:
+  - github-actions
+  - benchmark
+  - model-checking
+  - llm-evaluation
