@@ -1,8 +1,9 @@
 # protocol-bench-action
 
-[![self-test](https://img.shields.io/badge/self--test-passing-brightgreen)](https://github.com/nickharris808/protocol-bench-action/actions/workflows/self-test.yml)
+[![self-test](https://github.com/nickharris808/protocol-bench-action/actions/workflows/self-test.yml/badge.svg)](https://github.com/nickharris808/protocol-bench-action/actions/workflows/self-test.yml)
 [![license](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 ![marketplace](https://img.shields.io/badge/GitHub-Action-blue)
+[![docs](https://img.shields.io/badge/docs-verification--docs-blue)](https://nickharris808.github.io/verification-docs/)
 
 **Score a Protocol-Bench submission in CI — and fail the build if a claimed detection cannot be
 proved.**
@@ -16,6 +17,77 @@ fails the job if the headline metric drops or a detection cannot be demonstrated
 That last part is the point. It is cheap to assert a protocol is broken and expensive to show it. A
 trace that does not start at the initial state, move only along real transitions, and end in a
 violating state earns no credit — so this gate cannot be passed by guessing.
+
+## Install
+
+Nothing to `pip install`. Reference the Action from a workflow; it installs its own dependency on
+first run:
+
+```yaml
+- uses: nickharris808/protocol-bench-action@v1
+  with:
+    submission: submission.json
+```
+
+It is a **composite** action, so it runs `bash` on the runner and needs `python` on `PATH` (every
+`ubuntu-latest` image has it) and no container. It installs
+[`protocol-bench`](https://pypi.org/project/protocol-bench/) from PyPI with a `>=1.1` floor, falling
+back to a `git+` install if the index is unreachable. The install is skipped entirely if
+`protocol_bench` is already importable.
+
+The version floor is load-bearing rather than cautious: `protocol-bench` 1.0.0 computed its headline
+metric without consulting the replay result, so a submission that fabricated every trace scored a
+perfect 1.0. Gating a build on that number would have enforced nothing.
+
+## 30-second quickstart
+
+Below is the **real output** of the Action's own `entrypoint.sh`, run locally with `GITHUB_OUTPUT`
+and `GITHUB_STEP_SUMMARY` pointed at files. Build a submission that actually runs the checker:
+
+```console
+$ python - <<'EOF'
+import json
+from protocol_bench import load_tasks
+from minicheck import check_safety
+sub = {}
+for t in load_tasks():
+    r = check_safety(t.build())["properties"][t.property]
+    sub[t.id] = {"violated": not r["holds"], "trace": r.get("counterexample")}
+json.dump(sub, open("submission.json", "w"), default=str)
+EOF
+$ PB_SUBMISSION=submission.json PB_MIN_BA=0.9 PB_MIN_CEX=2 ./entrypoint.sh
+$ echo $?
+0
+$ cat "$GITHUB_OUTPUT"
+balanced-accuracy=1.0
+valid-counterexamples=2
+```
+
+Now strip every trace, keeping every verdict correct — the exact submission that verdict-only
+scoring would score 1.0:
+
+```console
+$ python -c "import json; d=json.load(open('submission.json')); [d[k].update(trace=None) for k in d]; json.dump(d, open('weak.json','w'))"
+$ PB_SUBMISSION=weak.json PB_MIN_BA=0.9 PB_MIN_CEX=2 ./entrypoint.sh
+::error::balanced accuracy 0.5 is below the required 0.9
+::error::only 0 counterexamples replayed; 2 required
+$ echo $?
+1
+$ cat "$GITHUB_OUTPUT"
+balanced-accuracy=0.5
+valid-counterexamples=0
+```
+
+That is the whole argument in two runs. Same verdicts, no evidence, half the score.
+
+And a scan of nothing:
+
+```console
+$ PB_SUBMISSION=nope.json PB_MIN_BA=0.9 PB_MIN_CEX=2 ./entrypoint.sh
+::error::submission file not found: nope.json
+$ echo $?
+3
+```
 
 ## Usage
 
@@ -65,7 +137,8 @@ no gate at all.
 
 ## Example output
 
-The action writes a summary to the job page:
+The action writes a summary to the job page. This is the verbatim `GITHUB_STEP_SUMMARY` from the
+passing run in the [quickstart](#30-second-quickstart):
 
 > ### protocol-bench
 >
@@ -77,10 +150,81 @@ The action writes a summary to the job page:
 
 ## This action tests itself
 
-The [self-test workflow](.github/workflows/self-test.yml) runs the action against three real cases on
-every push: a perfect submission that must pass with both outputs populated, a weak submission that
-**must fail** the gate, and a missing file that **must exit 3**. If the gate ever stops gating, the
-build goes red.
+The [self-test workflow](.github/workflows/self-test.yml) runs the action against **four** real cases
+on every push:
+
+| case | must |
+|---|---|
+| a perfect submission | pass, with both outputs populated |
+| a weak submission | **fail** the gate |
+| a missing file | **exit 3** |
+| **a runner with nothing pre-installed** | pass — the action installs its own dependency |
+
+That last one is there because of a defect it caught. Every other job `pip install`s
+`protocol-bench` before invoking the action, which makes the entrypoint's `import protocol_bench`
+succeed and skips the install line entirely — so a **broken install line stayed green**. At the time
+the entrypoint ran a bare `pip install protocol-bench` against a name that was not on any index, and
+the self-test could not see it. The job now asserts the package is genuinely absent before it
+starts, which is the only way this line is ever actually exercised.
+
+## Troubleshooting
+
+**`exit 3` with `submission file not found`.** The path is resolved relative to the workspace root
+(`${{ github.workspace }}`), not the workflow file. If an earlier step wrote it into a subdirectory,
+give the path from the root. Exit 3 is deliberately not 0: a scorer pointed at nothing must not
+report success.
+
+**Balanced accuracy is 0.5 and my verdicts are all correct.** Then no trace replayed. Only a
+*credited* detection counts, and a detection is credited only when its trace starts at the initial
+state, moves along real transitions, and ends in a genuinely violating state. Run
+`protocol-bench score submission.json --json` locally and read `per_task[].trace.reason`.
+
+**`completions` is set and my `submission` is being ignored.** That is by design — `completions`
+overrides `submission`. Leave `completions` empty (`""`, the default) to score a submission file.
+
+**The gate passes on a submission I know is bad.** Check the thresholds. Both default to the vacuous
+value (`min-balanced-accuracy: "0.0"`, `require-valid-counterexamples: "0"`), so an unconfigured
+gate gates nothing. Set both.
+
+**The job is slow on the first run.** It is installing `protocol-bench` and `minicheck` from git.
+Pre-install them in an earlier step and the entrypoint skips its own install.
+
+**`::error::` lines appear but the job is green.** You have `continue-on-error: true` on the step. Add
+an explicit assertion on the outputs afterwards, or drop the flag.
+
+**Outputs are empty strings.** They are only written on a run that got as far as scoring. An exit-3
+run writes nothing, so branch on `steps.<id>.outcome` before reading them.
+
+## FAQ
+
+**"Why does a benchmark need traces? Isn't the verdict the answer?"**
+Because the verdict is guessable and the trace is not. "The WPA2 four-way handshake" sits next to
+"vulnerable" in every training corpus, so a model can be right about it having done no reasoning at
+all. The [quickstart](#30-second-quickstart) shows the two runs side by side: identical verdicts,
+`1.0` with traces and `0.5` without.
+
+**"Fifteen tasks is a tiny benchmark."**
+It is, and the README of the task set says so first. One task flipping moves balanced accuracy by
+0.25. Treat per-task outcomes as the primary result and the aggregate as a summary, and always report
+the task-set version alongside the number.
+
+**"Can I use this as a security gate for my product?"**
+No. The tasks are models of *published procedures*, not implementations. A passing run says a
+submission scored above your threshold on those fifteen models; it says nothing about shipping code.
+
+**"My detector found a real bug not in the task set. Does it score?"**
+No — scoring is over the fixed set only. That is a property of a benchmark, not a defect. If the
+finding is on one of the fifteen and the labels are wrong, that is the single most useful issue you
+can open.
+
+**"Why is a failed replay a false negative rather than an error?"**
+Because a claim that cannot be demonstrated earns nothing — the same rule the rest of the portfolio
+applies. Treating it as an error would let a submission convert "I could not show it" into a
+non-result rather than a miss.
+
+**"The `v1` tag — is it moving?"**
+`v1` tracks the latest v1.x. Pin the full SHA if you need byte-stability, which is the normal advice
+for any third-party Action.
 
 ## Honest scope
 

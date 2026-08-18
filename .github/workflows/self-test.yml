@@ -58,7 +58,7 @@ jobs:
   # The job that matters most: NOTHING is pre-installed, so the action's own install path runs.
   # Every other job here pip-installs protocol-bench before invoking the action, which makes
   # entrypoint.sh's `import protocol_bench` succeed and skips the install entirely. That is how a
-  # broken `pip install protocol-bench` (404 — the package is not on PyPI) stayed green.
+  # bare `pip install protocol-bench`, against a name that resolved to nothing, stayed green.
   stranger-with-nothing-preinstalled:
     runs-on: ubuntu-latest
     steps:
